@@ -13,15 +13,18 @@ GALAXY_API_URL = os.getenv("GALAXY_API_URL", "http://localhost:8080/api")
 GALAXY_API_KEY = os.getenv("GALAXY_API_KEY", "your_api_key")
 
 # Default size in GB for tar files
-DEFAULT_TAR_SIZE_GB = float(os.getenv("DEFAULT_TAR_SIZE_GB", .02))
+DEFAULT_TAR_SIZE_GB = float(os.getenv("DEFAULT_TAR_SIZE_GB", 300))
 
 # Default interval in seconds for checking task status
-DEFAULT_TASK_CHECK_INTERVAL_SECONDS = 2
+DEFAULT_TASK_CHECK_INTERVAL_SECONDS = 5
 
 DEFAULT_FILE_PATTERN = "**/*"
 
 # Destination for archived files, maps to a destination in Galaxy.
 FILESOURCE_DESTINATION = "gxy-archiver"
+
+# Delay between separate history iterations
+REQUEST_DELAY = 1
 
 if GALAXY_API_KEY == "your_api_key":
     api_key_option = click.option("--api-key", prompt=True, hide_input=True, help="API key for authentication.")
@@ -370,6 +373,7 @@ def archive(api_url, api_key, history_id, history_id_file):
                     history_id = line.strip()
                     if history_id != "":
                         archive_history(api_url, api_key, history_id)
+                        time.sleep(REQUEST_DELAY)
     else:
         if history_id is None:
             raise Exception("Either --history-id or --history-id-file must be provided.")
