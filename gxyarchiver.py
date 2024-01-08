@@ -302,10 +302,12 @@ def create_manifest_and_tar(
 
     # Create tar archive
     tar_file = os.path.join(tar_path, tar_filename)
-    with tarfile.open(tar_file, "w:gz") as tar:
+    tar_file_part = os.path.join(tar_path, f"_{tar_filename}.part")
+    with tarfile.open(tar_file_part, "w:gz") as tar:
         for file in oldest_files:
             tar.add(file)
         tar.add(manifest_file)
+    os.rename(tar_file_part, tar_file)
 
     if remove_files_after_archive:
         # On successfully creating the tar and writing the manifest, remove the
