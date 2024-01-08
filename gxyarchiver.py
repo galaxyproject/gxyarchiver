@@ -254,6 +254,7 @@ def create_manifest_and_tar(
     manifest_path,
     tar_path,
     file_pattern=DEFAULT_FILE_PATTERN,
+    required_size_gb=DEFAULT_TAR_SIZE_GB,
     remove_files_after_archive=True,
 ):
     """
@@ -267,7 +268,7 @@ def create_manifest_and_tar(
     Returns:
     None
     """
-    oldest_files = find_oldest_files(directory, DEFAULT_TAR_SIZE_GB, file_pattern)
+    oldest_files = find_oldest_files(directory, required_size_gb, file_pattern)
 
     # Write manifest as JSON.  This could be sequential, but we have timestamps and catalogs.
     # generate a new manifest, named by datetime, and write it to manifest_path
@@ -326,6 +327,7 @@ def check_folder_for_archiving(folder_path, required_size_gb, file_pattern=DEFAU
     # Convert total size from bytes to gigabytes
     total_size_gb = total_size / (1024**3)
 
+    click.echo(f"{total_size_gb=}, {required_size_gb=}")
     return total_size_gb >= required_size_gb
 
 
@@ -403,18 +405,18 @@ def bundle(folder_path, required_size_gb, continual):
     if continual:
         # Emulate running the check/bundle script while there remain enough files to tar.
         while check_folder_for_archiving(
-            archivesource, DEFAULT_TAR_SIZE_GB, "**/*.rocrate.zip"
+            archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                archivesource, basearchivedir, archivedest, "**/*.rocrate.zip"
+                archivesource, basearchivedir, archivedest, "**/*.rocrate.zip", required_size_gb
             )
     else:
         # Just run once
         if check_folder_for_archiving(
-            archivesource, DEFAULT_TAR_SIZE_GB, "**/*.rocrate.zip"
+            archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                archivesource, basearchivedir, archivedest, "**/*.rocrate.zip"
+                archivesource, basearchivedir, archivedest, "**/*.rocrate.zip", required_size_gb
             )
 
 
