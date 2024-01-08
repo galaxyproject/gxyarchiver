@@ -388,7 +388,7 @@ def archive(api_url, api_key, history_id, history_id_file):
 )
 @click.option(
     "--continual",
-    default=True,
+    default=False,
     help="If continual is set, will keep bundling until there are not enough files left."
 )
 def bundle(folder_path, required_size_gb, continual):
