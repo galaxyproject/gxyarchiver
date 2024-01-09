@@ -118,12 +118,19 @@ def archive_history(api_url, api_key, history_id):
         archive_task_complete = False
 
         task_check_count = 0
+        session = requests.Session()
+        retries = requests.packages.urllib3.util.retry.Retry(
+            total=10,
+            backoff_factor=1.0,
+            status_forcelist=[429]
+        )
+        session.mount(api_url, requests.adapters.HTTPAdapter(max_retries=retries))
         while not archive_task_complete:
             click.echo(
                 f"\rMonitoring archive status, attempt: {task_check_count}, total time: { task_check_count * DEFAULT_TASK_CHECK_INTERVAL_SECONDS} seconds.",
                 nl=False,
             )
-            task_status_response = requests.get(task_status_url, headers=request_headers)
+            task_status_response = session.get(task_status_url, headers=request_headers)
             task_status_response.raise_for_status()
             task_status = task_status_response.text
             click.echo("\r", nl=False)
