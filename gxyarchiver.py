@@ -311,8 +311,9 @@ def create_manifest_and_tar(
     tar_file = os.path.join(tar_path, tar_filename)
     tar_file_part = os.path.join(tar_path, f"_{tar_filename}.part")
     with tarfile.open(tar_file_part, "w:gz") as tar:
-        for file in oldest_files:
-            tar.add(file, arcname=f"archives/{os.path.basename(file)}")
+        with click.progressbar(oldest_files) as bar:
+            for file in bar:
+                tar.add(file, arcname=f"archives/{os.path.basename(file)}")
         tar.add(manifest_file, arcname=os.path.basename(manifest_file))
     os.rename(tar_file_part, tar_file)
 
