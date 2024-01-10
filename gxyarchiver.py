@@ -122,7 +122,7 @@ def archive_history(api_url, api_key, history_id):
         retries = requests.packages.urllib3.util.retry.Retry(
             total=10,
             backoff_factor=1.0,
-            status_forcelist=[429]
+            status_forcelist=[429, 502]
         )
         session.mount(api_url, requests.adapters.HTTPAdapter(max_retries=retries))
         while not archive_task_complete:
