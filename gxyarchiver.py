@@ -12,6 +12,7 @@ from pathlib import Path
 import click
 import requests
 from tqdm import tqdm
+from tqdm.utils import _term_move_up
 
 # API Access/Key
 GALAXY_API_URL = os.getenv("GALAXY_API_URL", "http://localhost:8080/api")
@@ -38,13 +39,14 @@ else:
 
 api_url_option = click.option("--api-url", default=GALAXY_API_URL, help="URL of the Galaxy API.")
 
+DEBUG = False
+
 
 def _ignore_errors(f, *args, **kwargs):
     try:
         f(*args, **kwargs)
     except Exception:
         tqdm.write("".join(traceback.format_exc()))
-        #tqdm.write(str(exc))
 
 
 def get_up_to_date_export_record(api_url, headers, history_id):
@@ -84,7 +86,6 @@ def archive_history(api_url, api_key, history_id):
 
     tqdm.write(f"Processing history: {history_id} ")
     history_summary = get_history_summary(api_url, request_headers, history_id)
-
     if history_summary["archived"] or history_summary["purged"]:
         tqdm.write(f"\tHistory {history_id} already archived [{history_summary['archived']}] or purged [{history_summary['purged']}], skipping.")
         return True
@@ -138,12 +139,14 @@ def archive_history(api_url, api_key, history_id):
             status_forcelist=[429, 502]
         )
         session.mount(api_url, requests.adapters.HTTPAdapter(max_retries=retries))
+        if DEBUG:
+            tqdm.write("")
         while not archive_task_complete:
-            tqdm.write(
-                f"\rMonitoring archive status, attempt: {task_check_count}, total time: { task_check_count * DEFAULT_TASK_CHECK_INTERVAL_SECONDS} seconds.",
-                #nl=False,
-                end="",
-            )
+            if DEBUG:
+                tqdm.write(_term_move_up() + "\r" +
+                    f"\rMonitoring archive status, attempt: {task_check_count}, total time: { task_check_count * DEFAULT_TASK_CHECK_INTERVAL_SECONDS} seconds.",
+                    end="",
+                )
             task_status_response = session.get(task_status_url, headers=request_headers)
             task_status_response.raise_for_status()
             task_status = task_status_response.text
@@ -354,14 +357,16 @@ def check_folder_for_archiving(folder_path, required_size_gb, file_pattern=DEFAU
     # Convert total size from bytes to gigabytes
     total_size_gb = total_size / (1024**3)
 
-    click.echo(f"{total_size_gb=}, {required_size_gb=}")
+    tqdm.write(f"Current size of export folder: {total_size_gb:0.2f} GB")
     return total_size_gb >= required_size_gb
 
 
 @click.group()
-def cli():
+@click.option("--debug/--no-debug", "-d", default=False)
+def cli(debug):
     """Galaxy History Archiving CLI."""
-    pass
+    global DEBUG
+    DEBUG = debug
 
 
 @click.command()
