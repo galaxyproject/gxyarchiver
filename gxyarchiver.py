@@ -121,7 +121,7 @@ def archive_history(api_url, api_key, history_id):
         export_response.raise_for_status()  # This will raise an error if the request fails
         export_data = export_response.json()
         task_id = export_data.get("id")
-        tqdm.write(f"\tNew export record creation with task id: {task_id}")
+        tqdm.write(f"\tNew export record creation for history {history_id} with task id: {task_id}")
 
         # Wait for task to finish, checking the returned task repeatedly.
         # http://localhost:8081/api/tasks/1d941e24-b1e3-4e1f-bfe8-1973d33e503a/state
@@ -144,7 +144,7 @@ def archive_history(api_url, api_key, history_id):
         while not archive_task_complete:
             if DEBUG:
                 tqdm.write(_term_move_up() + "\r" +
-                    f"\rMonitoring archive status, attempt: {task_check_count}, total time: { task_check_count * DEFAULT_TASK_CHECK_INTERVAL_SECONDS} seconds.",
+                    f"\rMonitoring archive status, attempt: {task_check_count}, total time: {task_check_count * DEFAULT_TASK_CHECK_INTERVAL_SECONDS} seconds.",
                     end="",
                 )
             task_status_response = session.get(task_status_url, headers=request_headers)
@@ -154,7 +154,7 @@ def archive_history(api_url, api_key, history_id):
             # yes, this is a literal string response with quoted "SUCCESS" or "PENDING"
             if task_status == '"SUCCESS"':
                 archive_task_complete = True
-                tqdm.write("Archive task complete")
+                tqdm.write(f"Archive task complete for history {history_id}")
             elif task_status == '"FAILURE"':
                 archive_task_complete = True
                 tqdm.write(f"Archive task failed -- investigate task {task_id} for history {history_id}")
