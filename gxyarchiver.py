@@ -409,7 +409,7 @@ def archive(api_url, api_key, history_id, history_id_file, ignore_errors, num_co
         with open(history_id_file) as file:
             history_ids = [l.strip() for l in file.readlines() if l.strip() != ""]
             with concurrent.futures.ThreadPoolExecutor(num_concurrent) as executor:
-                results = list(tqdm(executor.map(_archive_history, history_ids)))
+                results = list(tqdm(executor.map(_archive_history, history_ids), total=len(history_ids)))
                 # TODO: reimplement REQUEST_DELAY
     else:
         if history_id is None:
