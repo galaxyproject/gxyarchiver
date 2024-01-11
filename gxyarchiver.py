@@ -1,12 +1,17 @@
+#!/usr/bin/env python3
+import concurrent.futures
+import functools
 import json
 import os
 import tarfile
 import time
+import traceback
 import uuid
 from pathlib import Path
 
 import click
 import requests
+from tqdm import tqdm
 
 # API Access/Key
 GALAXY_API_URL = os.getenv("GALAXY_API_URL", "http://localhost:8080/api")
@@ -32,6 +37,14 @@ else:
     api_key_option = click.option("--api-key", default=GALAXY_API_KEY, help="API key for authentication.")
 
 api_url_option = click.option("--api-url", default=GALAXY_API_URL, help="URL of the Galaxy API.")
+
+
+def _ignore_errors(f, *args, **kwargs):
+    try:
+        f(*args, **kwargs)
+    except Exception:
+        tqdm.write("".join(traceback.format_exc()))
+        #tqdm.write(str(exc))
 
 
 def get_up_to_date_export_record(api_url, headers, history_id):
@@ -69,11 +82,11 @@ def archive_history(api_url, api_key, history_id):
     # set up basic request headers; we tweak this later for specific requests
     request_headers = {"X-API-KEY": api_key}
 
-    click.echo(f"Processing history: {history_id} ")
+    tqdm.write(f"Processing history: {history_id} ")
     history_summary = get_history_summary(api_url, request_headers, history_id)
 
     if history_summary["archived"] or history_summary["purged"]:
-        click.echo(f"\tHistory {history_id} already archived [{history_summary['archived']}] or purged [{history_summary['purged']}], skipping.")
+        tqdm.write(f"\tHistory {history_id} already archived [{history_summary['archived']}] or purged [{history_summary['purged']}], skipping.")
         return True
 
     # check to see if there already exists an up to date export record. If there
@@ -107,7 +120,7 @@ def archive_history(api_url, api_key, history_id):
         export_response.raise_for_status()  # This will raise an error if the request fails
         export_data = export_response.json()
         task_id = export_data.get("id")
-        click.echo(f"\tNew export record creation with task id: {task_id}")
+        tqdm.write(f"\tNew export record creation with task id: {task_id}")
 
         # Wait for task to finish, checking the returned task repeatedly.
         # http://localhost:8081/api/tasks/1d941e24-b1e3-4e1f-bfe8-1973d33e503a/state
@@ -126,21 +139,22 @@ def archive_history(api_url, api_key, history_id):
         )
         session.mount(api_url, requests.adapters.HTTPAdapter(max_retries=retries))
         while not archive_task_complete:
-            click.echo(
+            tqdm.write(
                 f"\rMonitoring archive status, attempt: {task_check_count}, total time: { task_check_count * DEFAULT_TASK_CHECK_INTERVAL_SECONDS} seconds.",
-                nl=False,
+                #nl=False,
+                end="",
             )
             task_status_response = session.get(task_status_url, headers=request_headers)
             task_status_response.raise_for_status()
             task_status = task_status_response.text
-            click.echo("\r", nl=False)
+            tqdm.write("\r", end="")#nl=False)
             # yes, this is a literal string response with quoted "SUCCESS" or "PENDING"
             if task_status == '"SUCCESS"':
                 archive_task_complete = True
-                click.echo("Archive task complete")
+                tqdm.write("Archive task complete")
             elif task_status == '"FAILURE"':
                 archive_task_complete = True
-                click.echo(f"Archive task failed -- investigate task {task_id} for history {history_id}")
+                tqdm.write(f"Archive task failed -- investigate task {task_id} for history {history_id}")
                 return False
             else:
                 # Wait for a few seconds before checking again
@@ -220,7 +234,7 @@ def archive_history(api_url, api_key, history_id):
         # Long term, reconcile this with verifying this same record exists in
         # storage manifests and proceed with purge.  Right now, we don't want to
         # touch this.
-        click.echo(f"Latest export record already exists for history { history_id }, skipping.")
+        tqdm.write(f"Latest export record already exists for history { history_id }, skipping.")
 
 
 def find_oldest_files(directory, target_size_gb, file_pattern=DEFAULT_FILE_PATTERN):
@@ -311,7 +325,7 @@ def create_manifest_and_tar(
     tar_file = os.path.join(tar_path, tar_filename)
     tar_file_part = os.path.join(tar_path, f"_{tar_filename}.part")
     with tarfile.open(tar_file_part, "w:gz") as tar:
-        with click.progressbar(oldest_files, label=tar_filename) as bar:
+        with tqdm(oldest_files, desc=tar_filename) as bar:
             for file in bar:
                 tar.add(file, arcname=f"archives/{os.path.basename(file)}")
         tar.add(manifest_file, arcname=os.path.basename(manifest_file))
@@ -371,19 +385,32 @@ def identify(api_url, api_key, inactive_years):
     type=click.Path(exists=True),
     help="Path to a file with a list of history ids to be archived.",
 )
-def archive(api_url, api_key, history_id, history_id_file):
+@click.option(
+    "--ignore-errors/--no-ignore-errors",
+    default=True,
+    help="Continue processing histories even if unhandled errors are encountered"
+)
+@click.option(
+    "--num-concurrent",
+    "-n",
+    type=int,
+    default=1,
+    help="Number of concurrent archive processes to run"
+)
+def archive(api_url, api_key, history_id, history_id_file, ignore_errors, num_concurrent):
     """
     Archive a specific history or list of histories in Galaxy.
     """
     if history_id_file:
+        if ignore_errors:
+            _archive_history = functools.partial(_ignore_errors, archive_history, api_url, api_key)
+        else:
+            _archive_history = functools.partial(archive_history, api_url, api_key)
         with open(history_id_file) as file:
-            history_ids = file.readlines()
-            with click.progressbar(history_ids) as bar:
-                for line in bar:
-                    history_id = line.strip()
-                    if history_id != "":
-                        archive_history(api_url, api_key, history_id)
-                        time.sleep(REQUEST_DELAY)
+            history_ids = [l.strip() for l in file.readlines() if l.strip() != ""]
+            with concurrent.futures.ThreadPoolExecutor(num_concurrent) as executor:
+                results = list(tqdm(executor.map(_archive_history, history_ids)))
+                # TODO: reimplement REQUEST_DELAY
     else:
         if history_id is None:
             raise Exception("Either --history-id or --history-id-file must be provided.")
@@ -403,7 +430,7 @@ def archive(api_url, api_key, history_id, history_id_file):
     help="Required size in GB for files to be ready for archiving.",
 )
 @click.option(
-    "--continual",
+    "--continual/--no-continual",
     default=False,
     help="If continual is set, will keep bundling until there are not enough files left."
 )
