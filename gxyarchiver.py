@@ -319,6 +319,10 @@ def create_manifest_and_tar(
             }
         )
 
+    # Create directories
+    os.makedirs(manifest_path, exist_ok=True)
+    os.makedirs(tar_path, exist_ok=True)
+
     # Create manifest
     manifest_file = os.path.join(manifest_path, manifest_filename)
     with open(manifest_file, "w") as f:
@@ -447,6 +451,7 @@ def bundle(folder_path, required_size_gb, continual):
     basearchivedir = os.path.abspath(folder_path)
     archivesource = basearchivedir + "/export"
     archivedest = basearchivedir + "/bundled"
+    manifestdest = basearchivedir + "/manifest"
 
     if continual:
         # Emulate running the check/bundle script while there remain enough files to tar.
@@ -454,7 +459,7 @@ def bundle(folder_path, required_size_gb, continual):
             archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                archivesource, basearchivedir, archivedest, "**/*.rocrate.zip", required_size_gb
+                archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
             )
     else:
         # Just run once
@@ -462,7 +467,7 @@ def bundle(folder_path, required_size_gb, continual):
             archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                archivesource, basearchivedir, archivedest, "**/*.rocrate.zip", required_size_gb
+                archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
             )
 
 
