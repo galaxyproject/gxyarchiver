@@ -268,7 +268,7 @@ def find_oldest_files(directory, target_size_gb, file_pattern=DEFAULT_FILE_PATTE
     # Select oldest files until reaching target size
     selected_files = []
     for file_data in files_data:
-        if total_size + file_data[1] > target_size_gb * 1024**3:
+        if total_size > target_size_gb * 1024**3:
             break
         selected_files.append(file_data[0])
         total_size += file_data[1]
