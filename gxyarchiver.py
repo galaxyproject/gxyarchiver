@@ -240,7 +240,7 @@ def archive_history(api_url, api_key, history_id):
         tqdm.write(f"Latest export record already exists for history { history_id }, skipping.")
 
 
-def find_oldest_files(directory, target_size_gb, file_pattern=DEFAULT_FILE_PATTERN):
+def find_oldest_files(api_key, api_url, directory, target_size_gb, file_pattern=DEFAULT_FILE_PATTERN):
     """
     Find the oldest files matching a pattern until their total size reaches a target size.
 
@@ -255,6 +255,9 @@ def find_oldest_files(directory, target_size_gb, file_pattern=DEFAULT_FILE_PATTE
     files_data = []
     total_size = 0
 
+    # set up basic request headers; we tweak this later for specific requests
+    request_headers = {"X-API-KEY": api_key}
+
     # Traverse directory and gather file details
     for file in Path(directory).glob(file_pattern):
         if file.is_file():
@@ -268,6 +271,12 @@ def find_oldest_files(directory, target_size_gb, file_pattern=DEFAULT_FILE_PATTE
     # Select oldest files until reaching target size
     selected_files = []
     for file_data in files_data:
+        # Assumes date_historyid.extension(s)
+        history_id = file_data[0].rsplit("_", 1)[-1].split(".", 1)[0]
+        history_summary = get_history_summary(api_url, request_headers, history_id)
+        if not history_summary["archived"] and not history_summary["purged"]:
+            tqdm.write(f"\tHistory {history_id} not purged/archived, skipping.")
+            continue
         if total_size > target_size_gb * 1024**3:
             break
         selected_files.append(file_data[0])
@@ -277,6 +286,8 @@ def find_oldest_files(directory, target_size_gb, file_pattern=DEFAULT_FILE_PATTE
 
 
 def create_manifest_and_tar(
+    api_key,
+    api_url,
     directory,
     manifest_path,
     tar_path,
@@ -295,7 +306,7 @@ def create_manifest_and_tar(
     Returns:
     None
     """
-    oldest_files = find_oldest_files(directory, required_size_gb, file_pattern)
+    oldest_files = find_oldest_files(api_key, api_url, directory, required_size_gb, file_pattern)
 
     # Write manifest as JSON.  This could be sequential, but we have timestamps and catalogs.
     # generate a new manifest, named by datetime, and write it to manifest_path
@@ -427,6 +438,8 @@ def archive(api_url, api_key, history_id, history_id_file, ignore_errors, num_co
 
 
 @click.command()
+@api_key_option
+@api_url_option
 @click.option(
     "--folder-path",
     prompt=True,
@@ -443,7 +456,7 @@ def archive(api_url, api_key, history_id, history_id_file, ignore_errors, num_co
     default=False,
     help="If continual is set, will keep bundling until there are not enough files left."
 )
-def bundle(folder_path, required_size_gb, continual):
+def bundle(api_key, api_url, folder_path, required_size_gb, continual):
     """
     Check if a folder has sufficient data for archiving.
     """
@@ -459,7 +472,7 @@ def bundle(folder_path, required_size_gb, continual):
             archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
+                api_key, api_url, archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
             )
     else:
         # Just run once
@@ -467,7 +480,7 @@ def bundle(folder_path, required_size_gb, continual):
             archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
+                api_key, api_url, archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
             )
 
 
