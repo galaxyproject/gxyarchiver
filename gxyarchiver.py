@@ -507,7 +507,7 @@ def bundle(api_key, api_url, folder_path, required_size_gb, continual):
             archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                api_key, api_url, archivesource, manifestdest, archivedest, "export/*.rocrate.zip", required_size_gb
+                api_key, api_url, archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
             )
     else:
         # Just run once
@@ -515,7 +515,7 @@ def bundle(api_key, api_url, folder_path, required_size_gb, continual):
             archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                api_key, api_url, archivesource, manifestdest, archivedest, "export/*.rocrate.zip", required_size_gb
+                api_key, api_url, archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
             )
 
 
