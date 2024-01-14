@@ -459,7 +459,7 @@ def verify(api_key, api_url, folder_path, quarantine_path):
     """
 
     request_headers = {"X-API-KEY": api_key}
-    file_pattern = "**/*.rocrate.zip"
+    file_pattern = "export/*.rocrate.zip"
 
     for file in Path(folder_path).glob(file_pattern):
         file_name = os.path.basename(file)
@@ -468,7 +468,8 @@ def verify(api_key, api_url, folder_path, quarantine_path):
         history_summary = get_history_summary(api_url, request_headers, history_id)
         if not (history_summary["archived"] and history_summary["purged"]):
             tqdm.write(f"\t{file_name}: History {history_id} not archived [{history_summary['archived']}] or not purged [{history_summary['purged']}].")
-            shutil.move(file, os.path.join(quarantine_path, file_name))
+            if quarantine_path:
+                shutil.move(file, os.path.join(quarantine_path, file_name))
 
 
 @click.command()
@@ -506,7 +507,7 @@ def bundle(api_key, api_url, folder_path, required_size_gb, continual):
             archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                api_key, api_url, archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
+                api_key, api_url, archivesource, manifestdest, archivedest, "export/*.rocrate.zip", required_size_gb
             )
     else:
         # Just run once
@@ -514,7 +515,7 @@ def bundle(api_key, api_url, folder_path, required_size_gb, continual):
             archivesource, required_size_gb, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
-                api_key, api_url, archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
+                api_key, api_url, archivesource, manifestdest, archivedest, "export/*.rocrate.zip", required_size_gb
             )
 
 
