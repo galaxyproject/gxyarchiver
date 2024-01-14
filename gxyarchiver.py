@@ -3,6 +3,7 @@ import concurrent.futures
 import functools
 import json
 import os
+import shutil
 import tarfile
 import time
 import traceback
@@ -448,6 +449,38 @@ def archive(api_url, api_key, history_id, history_id_file, ignore_errors, num_co
     help="Base path to archive directory.  This should have 'export' and 'bundled' dirs, and will use the root for manifests.",
 )
 @click.option(
+    "--quarantine-path",
+    type=click.Path(),
+    help="Quarantine unarchived exports to this path",
+)
+def verify(api_key, api_url, folder_path, quarantine_path):
+    """
+    Check if exports are marked properly in the database.
+    """
+
+    request_headers = {"X-API-KEY": api_key}
+    file_pattern = "**/*.rocrate.zip"
+
+    for file in Path(folder_path).glob(file_pattern):
+        file_name = os.path.basename(file)
+        # Assumes date_historyid.extension(s)
+        history_id = file_name.rsplit("_", 1)[-1].split(".", 1)[0]
+        history_summary = get_history_summary(api_url, request_headers, history_id)
+        if not (history_summary["archived"] and history_summary["purged"]):
+            tqdm.write(f"\t{file_name}: History {history_id} not archived [{history_summary['archived']}] or not purged [{history_summary['purged']}].")
+            shutil.move(file, os.path.join(quarantine_path, file_name))
+
+
+@click.command()
+@api_key_option
+@api_url_option
+@click.option(
+    "--folder-path",
+    prompt=True,
+    type=click.Path(exists=True),
+    help="Base path to archive directory.  This should have 'export' and 'bundled' dirs, and will use the root for manifests.",
+)
+@click.option(
     "--required-size-gb",
     default=DEFAULT_TAR_SIZE_GB,
     help="Required size in GB for files to be ready for archiving.",
@@ -488,6 +521,7 @@ def bundle(api_key, api_url, folder_path, required_size_gb, continual):
 # Adding commands to the CLI group
 cli.add_command(identify)
 cli.add_command(archive)
+cli.add_command(verify)
 cli.add_command(bundle)
 
 if __name__ == "__main__":
