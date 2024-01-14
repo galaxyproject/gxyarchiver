@@ -274,8 +274,8 @@ def find_oldest_files(api_key, api_url, directory, target_size_gb, file_pattern=
         # Assumes date_historyid.extension(s)
         history_id = file_data[0].rsplit("_", 1)[-1].split(".", 1)[0]
         history_summary = get_history_summary(api_url, request_headers, history_id)
-        if not history_summary["archived"] and not history_summary["purged"]:
-            tqdm.write(f"\tHistory {history_id} not purged/archived, skipping.")
+        if not (history_summary["archived"] and history_summary["purged"]):
+            tqdm.write(f"\tHistory {history_id} not archived [{history_summary['archived']}] or not purged [{history_summary['purged']}], skipping.")
             continue
         if total_size > target_size_gb * 1024**3:
             break
