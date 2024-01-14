@@ -271,7 +271,7 @@ def find_oldest_files(api_key, api_url, directory, target_size_gb, file_pattern=
     # Select oldest files until reaching target size
     selected_files = []
     for file_data in files_data:
-        file_name = file_data[0]
+        file_name = os.path.basename(file_data[0])
         # Assumes date_historyid.extension(s)
         history_id = file_name.rsplit("_", 1)[-1].split(".", 1)[0]
         history_summary = get_history_summary(api_url, request_headers, history_id)
@@ -280,7 +280,7 @@ def find_oldest_files(api_key, api_url, directory, target_size_gb, file_pattern=
             continue
         if total_size > target_size_gb * 1024**3:
             break
-        selected_files.append(file_name)
+        selected_files.append(file_data[0])
         total_size += file_data[1]
 
     return selected_files
