@@ -124,6 +124,8 @@ def archive_history(api_url, api_key, history_id):
         task_id = export_data.get("id")
         tqdm.write(f"\tNew export record creation for history {history_id} with task id: {task_id}")
 
+        time.sleep(REQUEST_DELAY)
+
         # Wait for task to finish, checking the returned task repeatedly.
         # http://localhost:8081/api/tasks/1d941e24-b1e3-4e1f-bfe8-1973d33e503a/state
         # Which responds with "SUCCESS" when done.
@@ -256,6 +258,7 @@ def find_oldest_files(api_key, api_url, directory, target_size_gb, file_pattern=
     files_data = []
     total_size = 0
 
+    # TODO: remove double purged/archived check here, it's already done in check_folder_for_archiving, just save that list of excluded files and exclude them here
     # set up basic request headers; we tweak this later for specific requests
     request_headers = {"X-API-KEY": api_key}
 
@@ -309,6 +312,7 @@ def create_manifest_and_tar(
     None
     """
     oldest_files = find_oldest_files(api_key, api_url, directory, required_size_gb, file_pattern)
+    assert oldest_files, f"find_oldest_files() returned empty list!: {oldest_files}"
 
     # Write manifest as JSON.  This could be sequential, but we have timestamps and catalogs.
     # generate a new manifest, named by datetime, and write it to manifest_path
@@ -358,7 +362,7 @@ def create_manifest_and_tar(
             os.remove(file)
 
 
-def check_folder_for_archiving(folder_path, required_size_gb, file_pattern=DEFAULT_FILE_PATTERN):
+def check_folder_for_archiving(api_key, api_url, folder_path, required_size_gb, quarantine, quarantine_path, file_pattern=DEFAULT_FILE_PATTERN):
     """
     Check if a folder has sufficient data for archiving.
 
@@ -367,9 +371,23 @@ def check_folder_for_archiving(folder_path, required_size_gb, file_pattern=DEFAU
     :return: True if folder has sufficient data, False otherwise.
     """
     total_size = 0
+
+    request_headers = {"X-API-KEY": api_key}
+
     for file in Path(folder_path).glob(file_pattern):
-        if file.is_file():
-            total_size += file.stat().st_size
+        if not file.is_file():
+            continue
+        file_name = os.path.basename(file)
+        # Assumes date_historyid.extension(s)
+        history_id = file_name.rsplit("_", 1)[-1].split(".", 1)[0]
+        history_summary = get_history_summary(api_url, request_headers, history_id)
+        if not (history_summary["archived"] and history_summary["purged"]):
+            tqdm.write(f"\t{file_name}: History {history_id} not archived [{history_summary['archived']}] or not purged [{history_summary['purged']}].")
+            if quarantine:
+                os.makedirs(quarantine_path, exist_ok=True)
+                shutil.move(file, os.path.join(quarantine_path, file_name))
+            continue
+        total_size += file.stat().st_size
 
     # Convert total size from bytes to gigabytes
     total_size_gb = total_size / (1024**3)
@@ -479,7 +497,7 @@ def verify(api_key, api_url, folder_path, quarantine_path):
     "--folder-path",
     prompt=True,
     type=click.Path(exists=True),
-    help="Base path to archive directory.  This should have 'export' and 'bundled' dirs, and will use the root for manifests.",
+    help="Base path to archive directory.  This should have 'export', 'bundled', and 'manifest' dirs.",
 )
 @click.option(
     "--required-size-gb",
@@ -491,7 +509,12 @@ def verify(api_key, api_url, folder_path, quarantine_path):
     default=False,
     help="If continual is set, will keep bundling until there are not enough files left."
 )
-def bundle(api_key, api_url, folder_path, required_size_gb, continual):
+@click.option(
+    "--quarantine/--no-quarantine",
+    default=False,
+    help="Quarantine unarchived exports to 'quarantine' dir in folder path",
+)
+def bundle(api_key, api_url, folder_path, required_size_gb, continual, quarantine):
     """
     Check if a folder has sufficient data for archiving.
     """
@@ -500,11 +523,12 @@ def bundle(api_key, api_url, folder_path, required_size_gb, continual):
     archivesource = basearchivedir + "/export"
     archivedest = basearchivedir + "/bundled"
     manifestdest = basearchivedir + "/manifest"
+    quarantinedest = basearchivedir + "/quarantine"
 
     if continual:
         # Emulate running the check/bundle script while there remain enough files to tar.
         while check_folder_for_archiving(
-            archivesource, required_size_gb, "**/*.rocrate.zip"
+            api_key, api_url, archivesource, required_size_gb, quarantine, quarantinedest, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
                 api_key, api_url, archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
@@ -512,7 +536,7 @@ def bundle(api_key, api_url, folder_path, required_size_gb, continual):
     else:
         # Just run once
         if check_folder_for_archiving(
-            archivesource, required_size_gb, "**/*.rocrate.zip"
+            api_key, api_url, archivesource, required_size_gb, quarantine, quarantinedest, "**/*.rocrate.zip"
         ):
             create_manifest_and_tar(
                 api_key, api_url, archivesource, manifestdest, archivedest, "**/*.rocrate.zip", required_size_gb
