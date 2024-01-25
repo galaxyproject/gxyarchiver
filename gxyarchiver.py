@@ -348,7 +348,7 @@ def create_manifest_and_tar(
     # Create tar archive
     tar_file = os.path.join(tar_path, tar_filename)
     tar_file_part = os.path.join(tar_path, f"_{tar_filename}.part")
-    with tarfile.open(tar_file_part, "w:gz") as tar:
+    with tarfile.open(tar_file_part, "w") as tar:
         with tqdm(oldest_files, desc=tar_filename) as bar:
             for file in bar:
                 tar.add(file, arcname=f"archives/{os.path.basename(file)}")
