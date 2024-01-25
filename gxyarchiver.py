@@ -467,19 +467,30 @@ def archive(api_url, api_key, history_id, history_id_file, ignore_errors, num_co
     help="Base path to archive directory.  This should have 'export' and 'bundled' dirs, and will use the root for manifests.",
 )
 @click.option(
+    "--archive-path",
+    type=click.Path(),
+    default=None,
+    help="Explicit path to archive directory instead of {file_path}/export. If set, --file-path is ignored.",
+)
+@click.option(
     "--quarantine-path",
     type=click.Path(),
+    default=None,
     help="Quarantine unarchived exports to this path",
 )
-def verify(api_key, api_url, folder_path, quarantine_path):
+def verify(api_key, api_url, folder_path, archive_path, quarantine_path):
     """
     Check if exports are marked properly in the database.
     """
 
     request_headers = {"X-API-KEY": api_key}
-    file_pattern = "export/*.rocrate.zip"
 
-    for file in Path(folder_path).glob(file_pattern):
+    if not archive_path:
+        archive_path = os.path.join(folder_path, "export")
+    archive_path = Path(archive_path)
+    file_pattern = "*.rocrate.zip"
+
+    for file in Path(archive_path).glob(file_pattern):
         file_name = os.path.basename(file)
         # Assumes date_historyid.extension(s)
         history_id = file_name.rsplit("_", 1)[-1].split(".", 1)[0]
