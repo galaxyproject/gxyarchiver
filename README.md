@@ -40,6 +40,11 @@ c11b5ebb6126
 c11b5ebb6127
 ```
 
+By default, Galaxy fails the export of a history that has a dataset whose file is missing from the object store,
+and the history is left unarchived. Pass `--tolerate-missing-data` to send `ignore_errors` with the export
+request: Galaxy then exports those datasets as discarded (attributes kept, no file) and skips missing provenance
+instead of failing. This needs a Galaxy release that supports it for missing files.
+
 
 Once this is done, you should have archives in wherever your filesource is configured to write to.  You can then stage them with:
 
