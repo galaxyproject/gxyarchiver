@@ -88,11 +88,18 @@ def export_file_name(export):
     return name
 
 
-def read_export_zip(path):
-    """Read an export zip's dataset list: {dataset uuid: size of its file in the zip, or None if absent}.
+def dataset_key(hid, create_time):
+    """Identify a history dataset by hid and create time, in both export attrs and API responses.
 
-    Datasets are keyed by uuid because the export encodes HDA ids with a separate key (kind="model_export"), so
-    they never match the ids the API returns. Several HDAs can share one dataset, and so one uuid.
+    HDA ids can't be used: the export encodes them with a separate key (kind="model_export"), so they never match
+    the ids the API returns. Dataset uuids can't either: older datasets have none. The export writes create_time
+    as str(datetime) and the API as isoformat, which differ only in the "T".
+    """
+    return f"{hid}@{(create_time or '').replace('T', ' ')}"
+
+
+def read_export_zip(path):
+    """Read an export zip's dataset list: {dataset key: size of its file in the zip, or None if absent}.
 
     Opening the zip reads its central directory, so a truncated zip fails here. File contents (CRCs) are not
     checked, since that means reading the whole zip.
@@ -106,18 +113,16 @@ def read_export_zip(path):
     prefix = attrs[0][: -len("datasets_attrs.txt")]
     in_zip = {}
     for dataset in datasets:
-        uuid = dataset.get("dataset_uuid")
-        if not uuid:
-            continue
+        key = dataset_key(dataset.get("hid"), dataset.get("create_time"))
         file_name = dataset.get("file_name")
         size = sizes.get(prefix + file_name) if file_name else None
-        if in_zip.get(uuid) is None:
-            in_zip[uuid] = size
+        if in_zip.get(key) is None:
+            in_zip[key] = size
     return in_zip
 
 
 def history_datasets_with_files(api_url, headers, history_id):
-    """{dataset uuid: file size} of the history's datasets that are in state ok and not purged (deleted and hidden too)."""
+    """{dataset key: file size} of the history's datasets that are in state ok and not purged (deleted and hidden too)."""
     datasets = {}
     offset = 0
     limit = 500
@@ -126,7 +131,7 @@ def history_datasets_with_files(api_url, headers, history_id):
             f"{api_url}/histories/{history_id}/contents",
             params={
                 "v": "dev",
-                "keys": "id,uuid,state,purged,file_size",
+                "keys": "id,hid,create_time,state,purged,file_size",
                 "q": ["history_content_type", "purged"],
                 "qv": ["dataset", "false"],
                 "limit": limit,
@@ -138,7 +143,7 @@ def history_datasets_with_files(api_url, headers, history_id):
         items = response.json()
         for item in items:
             if item.get("state") == "ok" and not item.get("purged"):
-                datasets[item.get("uuid") or f"no uuid: {item['id']}"] = item.get("file_size")
+                datasets[dataset_key(item.get("hid"), item.get("create_time"))] = item.get("file_size")
         if len(items) < limit:
             return datasets
         offset += limit
