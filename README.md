@@ -57,3 +57,21 @@ python3 gxyarchiver.py bundle --folder-path=archive
 ```
 
 This will check through archive/export, and create a bundle of histories adding up to the specified size, writing a manifest of all contents for searchability.  It will then move the histories into archive/bundled, and so on.
+
+Histories that were exported but never archived:
+
+If the `/archive` request fails, or is never made, after an export succeeds, the history keeps an up-to-date export
+record. Later `archive` runs skip it, and `bundle --quarantine` / `verify --quarantine-path` move its zip to
+`archive/quarantine`. As long as the history hasn't changed, that export is still valid. To archive these histories
+with their existing export:
+
+```
+python3 gxyarchiver.py reconcile --folder-path=archive               # dry run: report what would be archived
+python3 gxyarchiver.py reconcile --folder-path=archive --no-dry-run  # archive and purge them
+```
+
+For each zip in `archive/quarantine` whose history is not archived, `reconcile` checks that the zip is the history's
+up-to-date export and that it holds a file of the right size for every dataset the history still has (state ok, not
+purged). If so, it moves the zip back to `archive/export` and archives the history with that export, purging it.
+Anything else stays in quarantine, with the reason printed. Passing `--folder-path` to `archive` does the same for a
+history whose up-to-date export zip is in `archive/export` or `archive/quarantine`, instead of skipping it.

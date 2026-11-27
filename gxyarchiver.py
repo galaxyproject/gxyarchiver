@@ -8,6 +8,7 @@ import tarfile
 import time
 import traceback
 import uuid
+import zipfile
 from pathlib import Path
 
 import click
@@ -45,13 +46,13 @@ DEBUG = False
 
 def _ignore_errors(f, *args, **kwargs):
     try:
-        f(*args, **kwargs)
+        return f(*args, **kwargs)
     except Exception:
         tqdm.write("".join(traceback.format_exc()))
 
 
-def get_up_to_date_export_record(api_url, headers, history_id):
-    # Get the ID of the 'up-to-date' export record, or empty.
+def get_up_to_date_export(api_url, headers, history_id):
+    """Return the first 'up-to-date' export record of a history, or None."""
     export_check_url = f"{api_url}/histories/{history_id}/exports"
     export_check_response = requests.get(
         export_check_url,
@@ -60,20 +61,144 @@ def get_up_to_date_export_record(api_url, headers, history_id):
     export_check_response.raise_for_status()
     exports = export_check_response.json()
 
-    up_to_date_export_id = None
     for export in exports:
         if export.get("up_to_date"):
-            up_to_date_export_id = export.get("id")
-            break
+            return export
+    return None
 
-    return up_to_date_export_id
+
+def get_up_to_date_export_record(api_url, headers, history_id):
+    # Get the ID of the 'up-to-date' export record, or empty.
+    export = get_up_to_date_export(api_url, headers, history_id)
+    return export.get("id") if export else None
+
+
+def export_file_name(export):
+    """The file name of an export written to the archiver's file source, or None if it went elsewhere."""
+    try:
+        target_uri = export["export_metadata"]["request_data"]["payload"]["target_uri"]
+    except (KeyError, TypeError):
+        return None
+    prefix = f"gxfiles://{FILESOURCE_DESTINATION}/"
+    if not target_uri or not target_uri.startswith(prefix):
+        return None
+    name = target_uri[len(prefix):]
+    if "/" in name or not name.endswith(".rocrate.zip"):
+        return None
+    return name
+
+
+def read_export_zip(path):
+    """Read an export zip's dataset list: {encoded HDA id: size of its file in the zip, or None if absent}.
+
+    Opening the zip reads its central directory, so a truncated zip fails here. File contents (CRCs) are not
+    checked, since that means reading the whole zip.
+    """
+    with zipfile.ZipFile(path) as z:
+        sizes = {i.filename: i.file_size for i in z.infolist()}
+        attrs = [n for n in sizes if n.endswith("datasets_attrs.txt")]
+        if len(attrs) != 1:
+            raise ValueError(f"expected one datasets_attrs.txt, found {len(attrs)}")
+        datasets = json.loads(z.read(attrs[0]))
+    prefix = attrs[0][: -len("datasets_attrs.txt")]
+    in_zip = {}
+    for dataset in datasets:
+        file_name = dataset.get("file_name")
+        in_zip[dataset.get("encoded_id")] = sizes.get(prefix + file_name) if file_name else None
+    return in_zip
+
+
+def history_datasets_with_files(api_url, headers, history_id):
+    """{encoded id: file size} of the history's datasets that are in state ok and not purged (deleted and hidden too)."""
+    datasets = {}
+    offset = 0
+    limit = 500
+    while True:
+        response = requests.get(
+            f"{api_url}/histories/{history_id}/contents",
+            params={
+                "v": "dev",
+                "keys": "id,state,purged,file_size",
+                "q": ["history_content_type", "purged"],
+                "qv": ["dataset", "false"],
+                "limit": limit,
+                "offset": offset,
+            },
+            headers=headers,
+        )
+        response.raise_for_status()
+        items = response.json()
+        for item in items:
+            if item.get("state") == "ok" and not item.get("purged"):
+                datasets[item["id"]] = item.get("file_size")
+        if len(items) < limit:
+            return datasets
+        offset += limit
+
+
+def export_matches_history(api_url, headers, history_id, path):
+    """Return None if the zip holds every dataset the history still has, with a file of the right size, else why not."""
+    try:
+        in_zip = read_export_zip(path)
+    except (OSError, zipfile.BadZipFile, ValueError) as e:
+        return f"unreadable: {e}"
+    live = history_datasets_with_files(api_url, headers, history_id)
+    not_in_zip = [i for i in live if i not in in_zip]
+    no_file = [i for i in live if i in in_zip and in_zip[i] is None]
+    wrong_size = [i for i in live if in_zip.get(i) is not None and live[i] is not None and in_zip[i] != live[i]]
+    if not_in_zip or no_file or wrong_size:
+        return (
+            f"of {len(live)} datasets in the history, {len(not_in_zip)} are not in the zip, "
+            f"{len(no_file)} have no file in it, {len(wrong_size)} differ in size"
+        )
+    return None
+
+
+def reconcile_exported_history(api_url, headers, history_id, export, export_dir, quarantine_dir=None, dry_run=False):
+    """Archive and purge a history whose up-to-date export exists but was never followed by /archive.
+
+    This happens when the /archive request fails or is never made after a successful export: every later
+    `archive` run skips the history, because an up-to-date export exists, and `bundle --quarantine` moves its
+    zip to quarantine. The export is still valid as long as the history hasn't changed, so archive it with
+    that export instead of exporting again.
+
+    Returns True when the history was archived (or would be, with dry_run).
+    """
+    name = export_file_name(export)
+    if name is None:
+        tqdm.write(f"\t{history_id}: up-to-date export {export.get('id')} was not written to {FILESOURCE_DESTINATION}, skipping.")
+        return False
+    path = Path(export_dir) / name
+    if not path.is_file() and quarantine_dir is not None and (Path(quarantine_dir) / name).is_file():
+        path = Path(quarantine_dir) / name
+    if not path.is_file():
+        tqdm.write(f"\t{history_id}: export file {name} not found, skipping.")
+        return False
+    problem = export_matches_history(api_url, headers, history_id, path)
+    if problem:
+        tqdm.write(f"\t{history_id}: {name} doesn't match the history ({problem}), skipping.")
+        return False
+    if dry_run:
+        tqdm.write(f"\t{history_id}: would archive with export {export['id']} ({name}).")
+        return True
+    if path.parent != Path(export_dir):
+        # Back to export/, where bundle picks it up once the history is archived and purged.
+        shutil.move(str(path), str(Path(export_dir) / name))
+    purge_response = requests.post(
+        f"{api_url}/histories/{history_id}/archive",
+        json={"archive_export_id": export["id"], "purge_history": True},
+        headers=headers,
+    )
+    purge_response.raise_for_status()
+    tqdm.write(f"\t{history_id}: archived with export {export['id']} ({name}).")
+    return True
 
 
 def get_history_summary(api_url, headers, history_id):
     return requests.get(f"{api_url}/histories/{history_id}?view=summary", headers=headers).json()
 
 
-def archive_history(api_url, api_key, history_id, tolerate_missing_data=False):
+def archive_history(api_url, api_key, history_id, tolerate_missing_data=False, export_dir=None, quarantine_dir=None):
     """
     Invoke the Archive API endpoint to archive a specific history.
 
@@ -99,7 +224,8 @@ def archive_history(api_url, api_key, history_id, tolerate_missing_data=False):
     # gxfiles://gxy-archiver, then validate we have a record in the manifest and
     # then purge, down the road.
 
-    up_to_date_export_id = get_up_to_date_export_record(api_url, request_headers, history_id)
+    up_to_date_export = get_up_to_date_export(api_url, request_headers, history_id)
+    up_to_date_export_id = up_to_date_export.get("id") if up_to_date_export else None
 
     if up_to_date_export_id is None:
         # Generate the export record with a request like: http://localhost:8081/api/histories/7b3e34c9cfd75e90/write_store
@@ -240,11 +366,13 @@ def archive_history(api_url, api_key, history_id, tolerate_missing_data=False):
         }
         purge_response = requests.post(purge_url, json=purge_payload, headers=request_headers)
         purge_response.raise_for_status()
+    elif export_dir is not None:
+        # A previous run exported the history but never archived it.
+        return reconcile_exported_history(
+            api_url, request_headers, history_id, up_to_date_export, export_dir, quarantine_dir
+        )
     else:
-        # Long term, reconcile this with verifying this same record exists in
-        # storage manifests and proceed with purge.  Right now, we don't want to
-        # touch this.
-        tqdm.write(f"Latest export record already exists for history { history_id }, skipping.")
+        tqdm.write(f"Latest export record already exists for history { history_id }, skipping (pass --folder-path to archive it with that export).")
 
 
 def find_oldest_files(api_key, api_url, directory, target_size_gb, file_pattern=DEFAULT_FILE_PATTERN):
@@ -449,19 +577,27 @@ def identify(api_url, api_key, inactive_years):
     default=1,
     help="Number of concurrent archive processes to run"
 )
-def archive(api_url, api_key, history_id, history_id_file, ignore_errors, tolerate_missing_data, num_concurrent):
+@click.option(
+    "--folder-path",
+    type=click.Path(exists=True),
+    default=None,
+    help="Base archive directory (with 'export' and 'quarantine'). If set, a history whose up-to-date export is "
+    "in one of them, but which was never archived, is verified and archived with that export.",
+)
+def archive(api_url, api_key, history_id, history_id_file, ignore_errors, tolerate_missing_data, num_concurrent, folder_path):
     """
     Archive a specific history or list of histories in Galaxy.
     """
+    export_dir = quarantine_dir = None
+    if folder_path:
+        export_dir = os.path.join(os.path.abspath(folder_path), "export")
+        quarantine_dir = os.path.join(os.path.abspath(folder_path), "quarantine")
+    options = dict(tolerate_missing_data=tolerate_missing_data, export_dir=export_dir, quarantine_dir=quarantine_dir)
     if history_id_file:
         if ignore_errors:
-            _archive_history = functools.partial(
-                _ignore_errors, archive_history, api_url, api_key, tolerate_missing_data=tolerate_missing_data
-            )
+            _archive_history = functools.partial(_ignore_errors, archive_history, api_url, api_key, **options)
         else:
-            _archive_history = functools.partial(
-                archive_history, api_url, api_key, tolerate_missing_data=tolerate_missing_data
-            )
+            _archive_history = functools.partial(archive_history, api_url, api_key, **options)
         with open(history_id_file) as file:
             history_ids = [l.strip() for l in file.readlines() if l.strip() != ""]
             with concurrent.futures.ThreadPoolExecutor(num_concurrent) as executor:
@@ -470,7 +606,7 @@ def archive(api_url, api_key, history_id, history_id_file, ignore_errors, tolera
     else:
         if history_id is None:
             raise Exception("Either --history-id or --history-id-file must be provided.")
-        archive_history(api_url, api_key, history_id, tolerate_missing_data=tolerate_missing_data)
+        archive_history(api_url, api_key, history_id, **options)
 
 
 @click.command()
@@ -570,11 +706,60 @@ def bundle(api_key, api_url, folder_path, required_size_gb, continual, quarantin
             )
 
 
+@click.command()
+@api_key_option
+@api_url_option
+@click.option(
+    "--folder-path",
+    prompt=True,
+    type=click.Path(exists=True),
+    help="Base archive directory, with 'export' and 'quarantine' dirs.",
+)
+@click.option("--dry-run/--no-dry-run", default=True, help="Only report what would be archived (default).")
+def reconcile(api_key, api_url, folder_path, dry_run):
+    """
+    Archive the histories of quarantined exports that are still up to date.
+
+    For each zip in quarantine whose history is not archived: if the zip is the history's up-to-date export
+    and holds a file of the right size for every dataset the history still has (state ok, not purged), move
+    it back to export/ and archive the history with it (purging it). Everything else stays in quarantine and is reported.
+    """
+    request_headers = {"X-API-KEY": api_key}
+    base = os.path.abspath(folder_path)
+    export_dir = os.path.join(base, "export")
+    quarantine_dir = os.path.join(base, "quarantine")
+    outcomes = {"archived": 0, "skipped": 0, "already archived": 0, "not the up-to-date export": 0}
+    for file in sorted(Path(quarantine_dir).glob("*.rocrate.zip")):
+        file_name = file.name
+        history_id = file_name.rsplit("_", 1)[-1].split(".", 1)[0]
+        try:
+            summary = get_history_summary(api_url, request_headers, history_id)
+            if summary["archived"] or summary["purged"]:
+                tqdm.write(f"\t{file_name}: history archived [{summary['archived']}] purged [{summary['purged']}], leaving it.")
+                outcomes["already archived"] += 1
+                continue
+            export = get_up_to_date_export(api_url, request_headers, history_id)
+            if export is None or export_file_name(export) != file_name:
+                tqdm.write(f"\t{file_name}: not the history's up-to-date export, leaving it.")
+                outcomes["not the up-to-date export"] += 1
+                continue
+            done = reconcile_exported_history(
+                api_url, request_headers, history_id, export, export_dir, quarantine_dir, dry_run=dry_run
+            )
+            outcomes["archived" if done else "skipped"] += 1
+        except Exception:
+            tqdm.write(f"\t{file_name}: " + traceback.format_exc())
+            outcomes["skipped"] += 1
+        time.sleep(REQUEST_DELAY)
+    tqdm.write(("Dry run: " if dry_run else "") + ", ".join(f"{k}: {v}" for k, v in outcomes.items()))
+
+
 # Adding commands to the CLI group
 cli.add_command(identify)
 cli.add_command(archive)
 cli.add_command(verify)
 cli.add_command(bundle)
+cli.add_command(reconcile)
 
 if __name__ == "__main__":
     cli()
