@@ -73,13 +73,15 @@ def get_history_summary(api_url, headers, history_id):
     return requests.get(f"{api_url}/histories/{history_id}?view=summary", headers=headers).json()
 
 
-def archive_history(api_url, api_key, history_id):
+def archive_history(api_url, api_key, history_id, tolerate_missing_data=False):
     """
     Invoke the Archive API endpoint to archive a specific history.
 
     :param api_url: URL of the Galaxy API.
     :param api_key: API key for authentication.
     :param history_id: ID of the history to be archived.
+    :param tolerate_missing_data: Export with Galaxy's ``ignore_errors``, so datasets whose file is missing from the
+        object store are exported as discarded and missing provenance is skipped, instead of failing the export.
     """
 
     # set up basic request headers; we tweak this later for specific requests
@@ -118,6 +120,8 @@ def archive_history(api_url, api_key, history_id):
             "include_deleted": True,
             "include_hidden": True,
         }
+        if tolerate_missing_data:
+            create_export_payload["ignore_errors"] = True
         export_response = requests.post(export_record_url, json=create_export_payload, headers=request_headers)
         export_response.raise_for_status()  # This will raise an error if the request fails
         export_data = export_response.json()
@@ -431,21 +435,33 @@ def identify(api_url, api_key, inactive_years):
     help="Continue processing histories even if unhandled errors are encountered"
 )
 @click.option(
+    "--tolerate-missing-data/--no-tolerate-missing-data",
+    default=False,
+    help=(
+        "Ask Galaxy to export histories even if dataset files are missing from the object store (exported as "
+        "discarded) or provenance is incomplete, by sending ignore_errors in the write_store request."
+    ),
+)
+@click.option(
     "--num-concurrent",
     "-n",
     type=int,
     default=1,
     help="Number of concurrent archive processes to run"
 )
-def archive(api_url, api_key, history_id, history_id_file, ignore_errors, num_concurrent):
+def archive(api_url, api_key, history_id, history_id_file, ignore_errors, tolerate_missing_data, num_concurrent):
     """
     Archive a specific history or list of histories in Galaxy.
     """
     if history_id_file:
         if ignore_errors:
-            _archive_history = functools.partial(_ignore_errors, archive_history, api_url, api_key)
+            _archive_history = functools.partial(
+                _ignore_errors, archive_history, api_url, api_key, tolerate_missing_data=tolerate_missing_data
+            )
         else:
-            _archive_history = functools.partial(archive_history, api_url, api_key)
+            _archive_history = functools.partial(
+                archive_history, api_url, api_key, tolerate_missing_data=tolerate_missing_data
+            )
         with open(history_id_file) as file:
             history_ids = [l.strip() for l in file.readlines() if l.strip() != ""]
             with concurrent.futures.ThreadPoolExecutor(num_concurrent) as executor:
@@ -454,7 +470,7 @@ def archive(api_url, api_key, history_id, history_id_file, ignore_errors, num_co
     else:
         if history_id is None:
             raise Exception("Either --history-id or --history-id-file must be provided.")
-        archive_history(api_url, api_key, history_id)
+        archive_history(api_url, api_key, history_id, tolerate_missing_data=tolerate_missing_data)
 
 
 @click.command()
